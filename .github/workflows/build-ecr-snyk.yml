@@ -66,16 +66,18 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
-          args: --file=Dockerfile --severity-threshold=high --sarif-file-output=snyk.sarif
+          args: --file=Dockerfile --severity-threshold=high
           command: monitor
 
       - name: Upload SARIF to GitHub Security tab
+        if: hashFiles('snyk.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         continue-on-error: true
         with:
           sarif_file: snyk.sarif
 
       - name: Upload SARIF as artifact
+        if: hashFiles('snyk.sarif') != ''
         uses: actions/upload-artifact@v4
         with:
           name: snyk-sarif
