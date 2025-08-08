@@ -11,7 +11,7 @@ permissions:
 
 env:
   # 必要に応じて変更してください
-  ECR_REPOSITORY: sample-app
+  ECR_REPOSITORY: github-actions-snyk-test
   AWS_REGION: ap-northeast-1
 
 jobs:
@@ -60,7 +60,7 @@ jobs:
           docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
       - name: Snyk scan (container image)
-        uses: snyk/actions/docker@master
+        uses: snyk/actions/docker@v4
         continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
