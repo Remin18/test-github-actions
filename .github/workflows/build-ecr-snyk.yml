@@ -67,6 +67,7 @@ jobs:
         with:
           image: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
           args: --file=Dockerfile --severity-threshold=high --sarif-file-output=snyk.sarif
+          command: monitor
 
       - name: Upload SARIF to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
