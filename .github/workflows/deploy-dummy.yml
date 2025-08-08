@@ -21,14 +21,30 @@ jobs:
     runs-on: ubuntu-latest
     env:
       AWS_REGION: ${{ inputs.aws_region }}
+      # SNYK_ORG_IDはGitHub Secretsで管理することを推奨します
+      SNYK_ORG_ID: ${{ secrets.SNYK_ORG_ID }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Parse Image URI
+        id: parse_image
+        run: |
+          IMAGE_URI="${{ inputs.image_uri }}"
+          # URIからリポジトリ名とタグを抽出
+          REPO_AND_TAG=$(echo $IMAGE_URI | cut -d'/' -f2-)
+          REPO_NAME=$(echo $REPO_AND_TAG | cut -d':' -f1)
+          IMAGE_TAG=$(echo $REPO_AND_TAG | cut -d':' -f2)
+          echo "repo_name=${REPO_NAME}" >> $GITHUB_OUTPUT
+          echo "image_tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
 
       - name: Pre stage (dummy)
         run: |
           echo "[pre] dummy pre-deploy stage"
           echo "image_uri=${{ inputs.image_uri }}"
+          echo "repo_name=${{ steps.parse_image.outputs.repo_name }}"
+          echo "image_tag=${{ steps.parse_image.outputs.image_tag }}"
 
       - name: Configure AWS credentials (Access keys)
         uses: aws-actions/configure-aws-credentials@v4
@@ -47,7 +63,10 @@ jobs:
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         run: |
-          snyk container monitor "${{ inputs.image_uri }}" --project-lifecycle=production
+          snyk container monitor "${{ inputs.image_uri }}" \
+            --org=${{ env.SNYK_ORG_ID }} \
+            --project-name="${{ steps.parse_image.outputs.repo_name }}:${{ steps.parse_image.outputs.image_tag }}" \
+            --project-lifecycle=production
 
       - name: Post stage (dummy)
         run: |
