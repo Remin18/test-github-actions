@@ -1,0 +1,54 @@
+name: Dummy Deploy with Snyk Monitor
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_uri:
+        description: "ECR等に存在するコンテナイメージのURI (例: 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/github-actions-snyk-test:sha)"
+        required: true
+        type: string
+      aws_region:
+        description: "AWSリージョン (ECRのリージョン)"
+        required: false
+        default: "ap-northeast-1"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  deploy-dummy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_REGION: ${{ inputs.aws_region }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Pre stage (dummy)
+        run: |
+          echo "[pre] dummy pre-deploy stage"
+          echo "image_uri=${{ inputs.image_uri }}"
+
+      - name: Configure AWS credentials (Access keys)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Setup Snyk CLI
+        uses: snyk/actions/setup@master
+
+      - name: Snyk container monitor (production lifecycle)
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        run: |
+          snyk container monitor "${{ inputs.image_uri }}" --project-lifecycle=production
+
+      - name: Post stage (dummy)
+        run: |
+          echo "[post] dummy post-deploy stage"
