@@ -15,7 +15,6 @@ jobs:
   add-to-collection:
     runs-on: ubuntu-latest
     env:
-      # SNYK_ORG_ID, ECR_INTEGRATION_ID はGitHub Secretsで管理することを推奨します
       SNYK_ORG_ID: ${{ secrets.SNYK_ORG_ID }}
       ECR_INTEGRATION_ID: ${{ secrets.ECR_INTEGRATION_ID }}
       SNYK_API_ENDPOINT_V1: https://api.snyk.io/v1
