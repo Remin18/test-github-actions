@@ -15,12 +15,10 @@ jobs:
   add-to-collection:
     runs-on: ubuntu-latest
     env:
-      # SNYK_ORG_ID, SNYK_COLLECTION_ID, ECR_INTEGRATION_ID はGitHub Secretsで管理することを推奨します
+      # SNYK_ORG_ID, ECR_INTEGRATION_ID はGitHub Secretsで管理することを推奨します
       SNYK_ORG_ID: ${{ secrets.SNYK_ORG_ID }}
-      SNYK_COLLECTION_ID: ${{ secrets.SNYK_COLLECTION_ID }}
       ECR_INTEGRATION_ID: ${{ secrets.ECR_INTEGRATION_ID }}
       SNYK_API_ENDPOINT_V1: https://api.snyk.io/v1
-      SNYK_API_ENDPOINT_REST: https://api.snyk.io/rest
 
     steps:
       - name: Checkout
@@ -30,14 +28,13 @@ jobs:
         run: |
           echo "[pre] dummy stage"
           echo "image_uri=${{ inputs.image_uri }}"
-          echo "org=${{ env.SNYK_ORG_ID }} collection=${{ env.SNYK_COLLECTION_ID }} integration=${{ env.ECR_INTEGRATION_ID }}"
+          echo "org=${{ env.SNYK_ORG_ID }} integration=${{ env.ECR_INTEGRATION_ID }}"
 
       - name: Validate inputs and env
         shell: bash
         run: |
           set -euo pipefail
           [[ -n "${SNYK_ORG_ID:-}" ]] || { echo "Error: SNYK_ORG_ID is not set" >&2; exit 1; }
-          [[ -n "${SNYK_COLLECTION_ID:-}" ]] || { echo "Error: SNYK_COLLECTION_ID is not set" >&2; exit 1; }
           [[ -n "${ECR_INTEGRATION_ID:-}" ]] || { echo "Error: ECR_INTEGRATION_ID is not set" >&2; exit 1; }
           [[ -n "${{ inputs.image_uri }}" ]] || { echo "Error: image_uri is required" >&2; exit 1; }
 
@@ -58,7 +55,7 @@ jobs:
             -H "Content-Type: application/json" \
             --data "${JSON_PAYLOAD}")
 
-          echo "--- Response headers ---"
+          echo "--- Response headers (partial) ---"
           echo "$API_RESPONSE_HEADERS" | sed -n '1,20p'
 
           JOB_URL=$(echo "$API_RESPONSE_HEADERS" | grep -i '^Location:' | tr -d '\r' | awk '{print $2}')
@@ -76,28 +73,6 @@ jobs:
 
           echo "Waiting 30 seconds for import job to process..."
           sleep 30
-
-      - name: Add project to collection (PROJECT_ID=image_uri as instructed)
-        env:
-          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          PROJECT_ID="${{ inputs.image_uri }}"  # 指示に従い image_uri を PROJECT_ID として使用
-          COLLECTION_ID="${SNYK_COLLECTION_ID}"
-
-          echo "Preparing JSON:API payload to add project to collection"
-          PAYLOAD=$(jq -n --arg PID "$PROJECT_ID" '{data: [{type: "projects", id: $PID}]}')
-          echo "$PAYLOAD" | jq '.'
-
-          echo "POST ${SNYK_API_ENDPOINT_REST}/orgs/${SNYK_ORG_ID}/collections/${COLLECTION_ID}/relationships/projects?version=2024-05-23"
-          curl -sS -X POST \
-            "${SNYK_API_ENDPOINT_REST}/orgs/${SNYK_ORG_ID}/collections/${COLLECTION_ID}/relationships/projects?version=2024-05-23" \
-            -H "Authorization: token ${SNYK_TOKEN}" \
-            -H "Content-Type: application/vnd.api+json" \
-            -d "$PAYLOAD" \
-            --fail
-          echo "Project added to collection successfully."
 
       - name: Post stage (dummy)
         run: |
