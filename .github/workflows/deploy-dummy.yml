@@ -7,10 +7,6 @@ on:
         description: "プロジェクトIDとして扱う image_uri を指定 (例: 123456789012.dkr.ecr.ap-northeast-1.amazonaws.com/github-actions-snyk-test:sha)"
         required: true
         type: string
-      collection_name:
-        description: "追加先のSnykコレクション名"
-        required: true
-        type: string
 
 permissions:
   contents: read
@@ -19,10 +15,12 @@ jobs:
   add-to-collection:
     runs-on: ubuntu-latest
     env:
-      # SNYK_ORG_IDはGitHub Secretsで管理することを推奨します
+      # SNYK_ORG_ID, SNYK_COLLECTION_ID, ECR_INTEGRATION_ID はGitHub Secretsで管理することを推奨します
       SNYK_ORG_ID: ${{ secrets.SNYK_ORG_ID }}
-      # APIエンドポイント（必要に応じて上書き可能）
-      SNYK_API_ENDPOINT: https://api.snyk.io/rest
+      SNYK_COLLECTION_ID: ${{ secrets.SNYK_COLLECTION_ID }}
+      ECR_INTEGRATION_ID: ${{ secrets.ECR_INTEGRATION_ID }}
+      SNYK_API_ENDPOINT_V1: https://api.snyk.io/v1
+      SNYK_API_ENDPOINT_REST: https://api.snyk.io/rest
 
     steps:
       - name: Checkout
@@ -32,75 +30,73 @@ jobs:
         run: |
           echo "[pre] dummy stage"
           echo "image_uri=${{ inputs.image_uri }}"
-          echo "collection_name=${{ inputs.collection_name }}"
+          echo "org=${{ env.SNYK_ORG_ID }} collection=${{ env.SNYK_COLLECTION_ID }} integration=${{ env.ECR_INTEGRATION_ID }}"
 
       - name: Validate inputs and env
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -z "${SNYK_ORG_ID:-}" ]]; then
-            echo "Error: SNYK_ORG_ID is not set (expected in repository Secrets)." >&2
-            exit 1
-          fi
-          if [[ -z "${{ inputs.image_uri }}" ]]; then
-            echo "Error: image_uri is required." >&2
-            exit 1
-          fi
-          if [[ -z "${{ inputs.collection_name }}" ]]; then
-            echo "Error: collection_name is required." >&2
-            exit 1
-          fi
+          [[ -n "${SNYK_ORG_ID:-}" ]] || { echo "Error: SNYK_ORG_ID is not set" >&2; exit 1; }
+          [[ -n "${SNYK_COLLECTION_ID:-}" ]] || { echo "Error: SNYK_COLLECTION_ID is not set" >&2; exit 1; }
+          [[ -n "${ECR_INTEGRATION_ID:-}" ]] || { echo "Error: ECR_INTEGRATION_ID is not set" >&2; exit 1; }
+          [[ -n "${{ inputs.image_uri }}" ]] || { echo "Error: image_uri is required" >&2; exit 1; }
 
-      - name: Get collections and extract target collection id
+      - name: Import ECR Image via Snyk /v1 import API (origin=ECR)
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
-          TARGET_COLLECTION_NAME="${{ inputs.collection_name }}"
-          echo "Fetching collections from ${SNYK_API_ENDPOINT}/orgs/${SNYK_ORG_ID}/collections?version=2024-05-23"
-          curl -sS \
+          IMAGE_URI="${{ inputs.image_uri }}"
+          IMAGE_NAME_AND_TAG=$(echo "${IMAGE_URI}" | cut -d'/' -f2-)
+          JSON_PAYLOAD=$(printf '{"target":{"name":"%s"}}' "$IMAGE_NAME_AND_TAG")
+
+          echo "Sending import request to Snyk API for target: $IMAGE_NAME_AND_TAG"
+          API_RESPONSE_HEADERS=$(curl -s -i -X POST \
+            "${SNYK_API_ENDPOINT_V1}/org/${SNYK_ORG_ID}/integrations/${ECR_INTEGRATION_ID}/import" \
             -H "Authorization: token ${SNYK_TOKEN}" \
-            -H "Accept: application/vnd.api+json" \
-            "${SNYK_API_ENDPOINT}/orgs/${SNYK_ORG_ID}/collections?version=2024-05-23&page%5Blimit%5D=200" \
-            --fail \
-            -o collections.json
+            -H "Content-Type: application/json" \
+            --data "${JSON_PAYLOAD}")
 
-          echo "Locate collection id by name: ${TARGET_COLLECTION_NAME}"
-          COLLECTION_ID=$(jq -r --arg NAME "${TARGET_COLLECTION_NAME}" '.data[] | select(.attributes.name == $NAME) | .id' collections.json | head -n1)
+          echo "--- Response headers ---"
+          echo "$API_RESPONSE_HEADERS" | sed -n '1,20p'
 
-          if [[ -z "${COLLECTION_ID}" || "${COLLECTION_ID}" == "null" ]]; then
-            echo "Error: Collection named '${TARGET_COLLECTION_NAME}' not found." >&2
-            echo "Available collections:" >&2
-            jq -r '.data[].attributes.name' collections.json >&2 || true
+          JOB_URL=$(echo "$API_RESPONSE_HEADERS" | grep -i '^Location:' | tr -d '\r' | awk '{print $2}')
+          if [[ -z "${JOB_URL}" ]]; then
+            echo "::error::Failed to start import job. API response did not include Location header."
+            echo "API Response:"
+            echo "$API_RESPONSE_HEADERS"
             exit 1
           fi
 
-          echo "Found target collection id: ${COLLECTION_ID}"
-          echo "collection_id=${COLLECTION_ID}" >> "$GITHUB_ENV"
+          JOB_ID=$(basename "$JOB_URL")
+          echo "Import job started successfully. Job ID: ${JOB_ID}"
+          echo "You can monitor the job status at: ${JOB_URL}"
+          echo "job_url=${JOB_URL}" >> "$GITHUB_OUTPUT"
 
-      - name: Add project to collection via Snyk API
+          echo "Waiting 30 seconds for import job to process..."
+          sleep 30
+
+      - name: Add project to collection (PROJECT_ID=image_uri as instructed)
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         shell: bash
         run: |
           set -euo pipefail
           PROJECT_ID="${{ inputs.image_uri }}"  # 指示に従い image_uri を PROJECT_ID として使用
-          COLLECTION_ID="${{ env.collection_id }}"
+          COLLECTION_ID="${SNYK_COLLECTION_ID}"
 
           echo "Preparing JSON:API payload to add project to collection"
           PAYLOAD=$(jq -n --arg PID "$PROJECT_ID" '{data: [{type: "projects", id: $PID}]}')
-
-          echo "POST ${SNYK_API_ENDPOINT}/orgs/${SNYK_ORG_ID}/collections/${COLLECTION_ID}/relationships/projects?version=2024-05-23"
           echo "$PAYLOAD" | jq '.'
 
+          echo "POST ${SNYK_API_ENDPOINT_REST}/orgs/${SNYK_ORG_ID}/collections/${COLLECTION_ID}/relationships/projects?version=2024-05-23"
           curl -sS -X POST \
-            "${SNYK_API_ENDPOINT}/orgs/${SNYK_ORG_ID}/collections/${COLLECTION_ID}/relationships/projects?version=2024-05-23" \
+            "${SNYK_API_ENDPOINT_REST}/orgs/${SNYK_ORG_ID}/collections/${COLLECTION_ID}/relationships/projects?version=2024-05-23" \
             -H "Authorization: token ${SNYK_TOKEN}" \
             -H "Content-Type: application/vnd.api+json" \
             -d "$PAYLOAD" \
             --fail
-
           echo "Project added to collection successfully."
 
       - name: Post stage (dummy)
